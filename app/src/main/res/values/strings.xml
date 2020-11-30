@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Misuri v.1.0.1</string>
+    <string name="calculation_title">Height calculated:</string>
+    <string name="button_text">Start measuring your height</string>
+</resources>
