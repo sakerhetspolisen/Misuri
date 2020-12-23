@@ -1,5 +1,6 @@
 package com.example.misuriv101
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -14,6 +15,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import android.text.method.ScrollingMovementMethod
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -38,10 +40,19 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Register sensor manager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+        // Register sensor manager
         prefs = LocationPrefs(this)
         val Latitude = prefs!!.Latitude
         val Longitude = prefs!!.Longitude
+
+        val errors: TextView = findViewById(R.id.errorlogs)
+        errors.movementMethod = ScrollingMovementMethod()
+
+        val typefaceUtil = TypefaceUtil()
+        typefaceUtil.overridefonts(this,"SERIF","fonts/spacegrotesk_medium.ttf")
 
         val button: Button = findViewById(R.id.init_button)
         button.setOnClickListener {
@@ -84,6 +95,7 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         RenderToScreen(heightMin,heightMax,heightAvg)
     }
 
+    @SuppressLint("SetTextI18n")
     fun RenderToScreen(min: Double, max: Double, avg: Double) {
         Toast.makeText(this, "Step logging stopped", Toast.LENGTH_SHORT).show()
 
@@ -92,7 +104,7 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
     }
     fun RenderLog(msg: String) {
         val errors: TextView = findViewById(R.id.errorlogs) as TextView
-        errors.append(" | $msg")
+        errors.append(System.getProperty("line.separator") + "$msg")
     }
 
     override fun onResume() {
