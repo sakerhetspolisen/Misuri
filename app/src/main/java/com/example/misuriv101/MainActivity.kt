@@ -19,6 +19,7 @@ import android.text.method.ScrollingMovementMethod
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import android.graphics.Typeface
 
 
 class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener {
@@ -32,10 +33,9 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
     var sensorManager:SensorManager? = null
     var stepsonInit = 0f;
     var stepsUntilNow = 0f;
-    var firstStepTaken = false;
     var prefs: LocationPrefs? = null
 
-
+    // When app is first launched
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -43,17 +43,27 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         // Register sensor manager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
-        // Register sensor manager
+        // TODO: What is this used for?
         prefs = LocationPrefs(this)
         val Latitude = prefs!!.Latitude
         val Longitude = prefs!!.Longitude
 
+        // Make textView scrollable for event logging
         val errors: TextView = findViewById(R.id.errorlogs)
         errors.movementMethod = ScrollingMovementMethod()
 
-        val typefaceUtil = TypefaceUtil()
-        typefaceUtil.overridefonts(this,"SERIF","fonts/spacegrotesk_medium.ttf")
+        // Bad way to set font
+        val textView: TextView = findViewById(R.id.stepsLbl)
+        val textView2: TextView = findViewById(R.id.height_title)
+        val textView3: TextView = findViewById(R.id.calculation_result)
+        val textView4: TextView = findViewById(R.id.errorlogs)
+        val spacegrotesk: Typeface = Typeface.createFromAsset(this.assets, "fonts/spacegrotesk.ttf")
+        textView.typeface = spacegrotesk
+        textView2.typeface = spacegrotesk
+        textView3.typeface = spacegrotesk
+        textView4.typeface = spacegrotesk
 
+        // Create an onClick for the "Start"-button
         val button: Button = findViewById(R.id.init_button)
         button.setOnClickListener {
             RenderLog("Button clicked")
@@ -61,6 +71,37 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
             healthPermissions()
         }
     }
+    
+    // This function is called every time the sensor values change
+    // TODO: Replace the !firstTepTaken with stepsonInit != 0f
+    var firstStepTaken = false;
+    override fun onSensorChanged(event: SensorEvent) {
+        if (stepCounterRunning) {
+            // The if-statement is run only once on init
+            // event.values[0] holds the current step value
+            if (!firstStepTaken) {
+                firstStepTaken = true
+                stepsonInit = event.values[0]
+                RenderLog("Initial steps value set")
+            }
+            // Calcuate steps taken since init
+            val newSteps = event.values[0]
+            stepsUntilNow = newSteps.toInt() - stepsonInit
+
+            // This is supposed to run only once, but it runs every time a step is taken
+            // TODO: Call InitCalculate() and Quitcalculate() only once
+            if (stepsUntilNow >= 5f) {
+                RenderLog("Initialized calculations")
+                InitCalculate()
+            }
+            if (stepsUntilNow >= stepsUntilBreak + 5f) {
+                RenderLog("Stopped calculation")
+                QuitCalculate()
+            }
+        }
+    }
+
+    // This function is called when 5 steps are taken
     fun InitCalculate() {
         prefs!!.Latitude = currentLat
         prefs!!.Longitude = currentLong
@@ -68,7 +109,11 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         RenderLog("Started measuring steps")
         Toast.makeText(this, "Step logging initiated", Toast.LENGTH_SHORT).show()
     }
-    fun Quitcalculate() {
+
+    // This function is called once the steps surpass stepsUntilBreak + 5
+    fun QuitCalculate() {
+
+        // Stop step counter
         stepCounterRunning = false
         RenderLog("Stopped measuring steps")
 
@@ -162,30 +207,6 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
     }
 
     override fun onAccuracyChanged(p0: Sensor?, p1: Int) {
-    }
-
-    override fun onSensorChanged(event: SensorEvent) {
-        if (stepCounterRunning) {
-            // Set initial steps value
-            if (!firstStepTaken) {
-                firstStepTaken = true
-                stepsonInit = event.values[0]
-                RenderLog("Initial steps value set")
-            }
-            // Calcuate steps taken since init
-            val newSteps = event.values[0]
-            stepsUntilNow = newSteps.toInt() - stepsonInit
-
-            //Init app
-            if (stepsUntilNow >= 5f) {
-                RenderLog("Initialized calculations")
-                InitCalculate()
-            }
-            if (stepsUntilNow >= stepsUntilBreak + 5f) {
-                RenderLog("Stopped calculation")
-                Quitcalculate()
-            }
-        }
     }
 
     class LocationPrefs (context: Context) {
