@@ -2,7 +2,6 @@ package com.example.misuriv101
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -20,33 +19,51 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import android.graphics.Typeface
+import android.os.Build
+import androidx.annotation.RequiresApi
 
 
-class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener {
-    private lateinit var locationManager: LocationManager
-    private val locationPermissionCode = 2
-
-    var currentLat:Double = 0.0;
-    var currentLong:Double = 0.0;
-    var stepsUntilBreak = 30f;
-    var stepCounterRunning = false
-    var sensorManager:SensorManager? = null
-    var stepsonInit = 0f;
-    var stepsUntilNow = 0f;
-    var prefs: LocationPrefs? = null
+class MainActivity : AppCompatActivity(), SensorEventListener {
+    private var locationManager : LocationManager? = null
+    private var startLat: Double? = null
+    private var startLong: Double? = null
+    private var currentLat: Double? = null
+    private var currentLong: Double? = null
+    private val startoffset = 5
+    private val stepsUntilBreak = 30
+    private var stepstaken = 0
+    private var stepCounterRunning = false
+    private var sensorManager:SensorManager? = null
+    private fun renderLog(msg: String) {
+        val errors: TextView = findViewById(R.id.errorlogs)
+        errors.append(System.getProperty("line.separator")!! + msg)
+    }
 
     // When app is first launched
+    @RequiresApi(Build.VERSION_CODES.Q)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Get health permissions
+        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED)) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACTIVITY_RECOGNITION), 2)
+        }
+        renderLog("Health permission granted")
+
+        // Get location permissions
+        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 2)
+        }
+        renderLog("Location permission granted")
+
+        // Create persistent LocationManager reference
+        locationManager = getSystemService(LOCATION_SERVICE) as LocationManager?
+        
         // Register sensor manager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-
-        // TODO: What is this used for?
-        prefs = LocationPrefs(this)
-        val Latitude = prefs!!.Latitude
-        val Longitude = prefs!!.Longitude
+        sensorManager!!.registerListener(this, sensorManager!!.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR), SensorManager.SENSOR_DELAY_FASTEST)
 
         // Make textView scrollable for event logging
         val errors: TextView = findViewById(R.id.errorlogs)
@@ -66,161 +83,106 @@ class MainActivity : AppCompatActivity(), LocationListener, SensorEventListener 
         // Create an onClick for the "Start"-button
         val button: Button = findViewById(R.id.init_button)
         button.setOnClickListener {
-            RenderLog("Button clicked")
-            getLocation()
-            healthPermissions()
+            // Activate step counter
+            stepCounterRunning = true
+            Toast.makeText(this, "Please take 5 steps to initiate", Toast.LENGTH_SHORT).show()
+
+            // Request location updates
+            try {
+                locationManager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0L, 0f, locationListener)
+                renderLog("Requested location updates")
+            } catch(ex: SecurityException) {
+                renderLog("ERROR: no location available")
+            }
+
+            renderLog("Button clicked")
         }
     }
-    
-    // This function is called every time the sensor values change
-    // TODO: Replace the !firstTepTaken with stepsonInit != 0f
-    var firstStepTaken = false;
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
     override fun onSensorChanged(event: SensorEvent) {
-        if (stepCounterRunning) {
-            // The if-statement is run only once on init
-            // event.values[0] holds the current step value
-            if (!firstStepTaken) {
-                firstStepTaken = true
-                stepsonInit = event.values[0]
-                RenderLog("Initial steps value set")
-            }
-            // Calcuate steps taken since init
-            val newSteps = event.values[0]
-            stepsUntilNow = newSteps.toInt() - stepsonInit
+        if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR && stepCounterRunning) {
+            stepstaken += 1
+            if (stepstaken == startoffset) { 
+                // Set start location
+                val latsnapshot = currentLat
+                startLat = latsnapshot
+                val longsnapshot = currentLong
+                startLong = longsnapshot
 
-            // This is supposed to run only once, but it runs every time a step is taken
-            // TODO: Call InitCalculate() and Quitcalculate() only once
-            if (stepsUntilNow >= 5f) {
-                RenderLog("Initialized calculations")
-                InitCalculate()
+                renderLog("Start location set to lat:" + startLat.toString() + " long:" + startLong.toString())
             }
-            if (stepsUntilNow >= stepsUntilBreak + 5f) {
-                RenderLog("Stopped calculation")
-                QuitCalculate()
+            if (stepstaken == startoffset + stepsUntilBreak) {
+                calculate()
             }
         }
-    }
-
-    // This function is called when 5 steps are taken
-    fun InitCalculate() {
-        prefs!!.Latitude = currentLat
-        prefs!!.Longitude = currentLong
-
-        RenderLog("Started measuring steps")
-        Toast.makeText(this, "Step logging initiated", Toast.LENGTH_SHORT).show()
     }
 
     // This function is called once the steps surpass stepsUntilBreak + 5
-    fun QuitCalculate() {
-
+    private fun calculate() {
         // Stop step counter
         stepCounterRunning = false
-        RenderLog("Stopped measuring steps")
+        renderLog("Step counter stopped")
 
-        val endLocation =
-            Location("")
-        endLocation.latitude = currentLat
-        endLocation.longitude = currentLong
-        RenderLog("Logged end location")
-        val startLocation =
-            Location("")
-        startLocation.latitude = prefs!!.Latitude
-        startLocation.longitude = prefs!!.Longitude
-        RenderLog("Got start location")
+        // Create location objects for start and end location
+        val endLocation = Location("")
+        endLocation.latitude = currentLat!!
+        endLocation.longitude = currentLong!!
+        val startLocation = Location("")
+        startLocation.latitude = startLat!!
+        startLocation.longitude = startLong!!
 
+        // Calculate walked distance
+        // TODO: Customize this so that user can walk curved distances
         val distanceInMeters = endLocation.distanceTo(startLocation)
-        RenderLog("Calculated distance")
+        renderLog("Calculated distance")
 
-        val strideLength = distanceInMeters / stepsUntilNow
+        val strideLength = distanceInMeters / stepsUntilBreak
         val heightMin = strideLength / 0.39
         val heightMax = strideLength / 0.46
         val heightAvg = strideLength / 0.42
-        RenderLog("Calculated proportions")
+        renderLog("Calculated proportions")
 
-        RenderToScreen(heightMin,heightMax,heightAvg)
+        renderToScreen(heightMin,heightMax,heightAvg)
     }
 
     @SuppressLint("SetTextI18n")
-    fun RenderToScreen(min: Double, max: Double, avg: Double) {
-        Toast.makeText(this, "Step logging stopped", Toast.LENGTH_SHORT).show()
-
-        val textView: TextView = findViewById(R.id.calculation_result) as TextView
+    fun renderToScreen(min: Double, max: Double, avg: Double) {
+        val textView: TextView = findViewById(R.id.calculation_result)
         textView.text = "I calculated your height to be between ${min}cm and ${max}cm. My guess is ${avg}cm."
     }
-    fun RenderLog(msg: String) {
-        val errors: TextView = findViewById(R.id.errorlogs) as TextView
-        errors.append(System.getProperty("line.separator") + "$msg")
-    }
 
+    @RequiresApi(Build.VERSION_CODES.KITKAT)
     override fun onResume() {
         super.onResume()
-        var stepsSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        val stepsSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
 
         if (stepsSensor == null) {
-            Toast.makeText(this, "No Step Counter Sensor", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No Step Detector Sensor", Toast.LENGTH_SHORT).show()
         } else {
             sensorManager?.registerListener(this, stepsSensor, SensorManager.SENSOR_DELAY_FASTEST)
         }
     }
 
-    override fun onPause() {
-        super.onPause()
-        stepCounterRunning = false
-        stepsUntilNow = 0f
-        stepsonInit = 0f
-        firstStepTaken = false
+    override fun onDestroy() {
+        super.onDestroy()
         sensorManager?.unregisterListener(this)
     }
 
-    private fun healthPermissions() {
-        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED)) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACTIVITY_RECOGNITION), locationPermissionCode)
+    override fun onPause() {
+        super.onPause()
+        stepCounterRunning = false
+    }
+
+    private val locationListener: LocationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            currentLat = location.latitude
+            currentLong = location.longitude
         }
-        RenderLog("Health data granted")
-        stepCounterRunning = true
-        Toast.makeText(this, "Please take 5 steps to initiate", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun getLocation() {
-        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), locationPermissionCode)
-        }
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 0.1f, this)
-        RenderLog("Location data granted")
-    }
-
-    override fun onLocationChanged(location: Location) {
-        currentLat = location.latitude
-        currentLong = location.longitude
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        if (requestCode == locationPermissionCode) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Permission Granted", Toast.LENGTH_SHORT).show()
-            }
-            else {
-                Toast.makeText(this, "Permission Denied", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    override fun onAccuracyChanged(p0: Sensor?, p1: Int) {
-    }
-
-    class LocationPrefs (context: Context) {
-        val prefsFileName = "com.misuriv101.location.init"
-        val latPrefName = "latitude"
-        val lonPrefName = "longitude"
-        var prefs: SharedPreferences = context.getSharedPreferences(prefsFileName, 0)
-
-        var Latitude: Double
-            get() = prefs.getLong(latPrefName, 0L).toDouble()
-            set(value) = prefs.edit().putLong(latPrefName, value.toLong()).apply()
-        var Longitude: Double
-            get() = prefs.getLong(lonPrefName, 0L).toDouble()
-            set(value) = prefs.edit().putLong(lonPrefName, value.toLong()).apply()
+        override fun onStatusChanged(provider: String, status: Int, extras: Bundle) {}
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
     }
 }
 
