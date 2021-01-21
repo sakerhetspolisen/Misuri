@@ -1,5 +1,7 @@
 <resources>
     <string name="app_name">Misuri</string>
+    <string name="app_version">1.3.0</string>
+    <string name="takensteps_default">0</string>
     <string name="calculation_title">Height calculated:</string>
     <string name="button_text">Start measuring your height</string>
     <string name="get_current_location_button">Get Current Location</string>

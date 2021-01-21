@@ -35,13 +35,14 @@ import com.google.android.material.snackbar.Snackbar
 @RequiresApi(Build.VERSION_CODES.M)
 class MainActivity : AppCompatActivity(), SensorEventListener {
     private val startoffset = 5
+    private val stepsUntilBreak = 100
     private var startlat : Double = 0.0
     private var startlong : Double = 0.0
     private var endlat : Double = 0.0
     private var endlong : Double = 0.0
     private var gotstartloc = false
-    private val stepsUntilBreak = 30
     private var stepstaken = 0
+    private lateinit var stepstextView : TextView
     private var stepCounterRunning = false
     private var sensorManager:SensorManager? = null
     private fun renderLog(msg: String) {
@@ -107,21 +108,27 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             sensorManager!!.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR),
             SensorManager.SENSOR_DELAY_FASTEST
         )
+        renderLog("Registered sensor manager")
 
 
         // Make textView scrollable for event logging
         val errors: TextView = findViewById(R.id.errorlogs)
         errors.movementMethod = ScrollingMovementMethod()
 
+        // Display taken steps on screen
+        stepstextView = findViewById(R.id.takensteps)
+
         // Bad way to set font
         val textView: TextView = findViewById(R.id.stepsLbl)
         val textView2: TextView = findViewById(R.id.height_title)
         val textView3: TextView = findViewById(R.id.calculation_result)
-        val textView4: TextView = findViewById(R.id.errorlogs)
+        val textView4: TextView = findViewById(R.id.showversion)
         val spacegrotesk: Typeface = Typeface.createFromAsset(this.assets, "fonts/spacegrotesk.ttf")
         textView.typeface = spacegrotesk
         textView2.typeface = spacegrotesk
         textView3.typeface = spacegrotesk
+        errors.typeface = spacegrotesk
+        stepstextView.typeface = spacegrotesk
         textView4.typeface = spacegrotesk
 
         // Create an onClick for the "Start"-button
@@ -142,7 +149,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onSensorChanged(event: SensorEvent) {
         if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR && stepCounterRunning) {
             stepstaken += 1
+            stepstextView.text = stepstaken.toString()
+            
             if (stepstaken == startoffset) {
+                renderLog("Steps = 5")
                 // Request location updates
                 try {
                     requestCurrentLocation()
@@ -152,6 +162,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
             }
             if (stepstaken == startoffset + stepsUntilBreak) {
+                renderLog("Steps = 35")
                 try {
                     requestCurrentLocation()
                 } catch (ex: SecurityException) {
@@ -173,6 +184,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val startLocation = Location("")
         startLocation.latitude = startlat
         startLocation.longitude = startlong
+        renderLog("Created start and end instances")
 
         // Calculate walked distance
         // TODO: Customize this so that user can walk curved distances
@@ -196,12 +208,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onStop() {
         super.onStop()
+        renderLog("onStop()")
         // Cancels location request (if in flight).
         cancellationTokenSource.cancel()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        renderLog("onDestroy()")
         sensorManager?.unregisterListener(this)
     }
 
