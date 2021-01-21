@@ -34,23 +34,38 @@ import com.google.android.material.snackbar.Snackbar
 
 @RequiresApi(Build.VERSION_CODES.M)
 class MainActivity : AppCompatActivity(), SensorEventListener {
+
+    // Steps that the user takes before the app starts to log distance, (warm-up steps)
     private val startoffset = 5
+
+    // How many steps the user takes before app stops registering distance
     private val stepsUntilBreak = 100
+
+    // Lat and long are stored in variables
     private var startlat : Double = 0.0
     private var startlong : Double = 0.0
     private var endlat : Double = 0.0
     private var endlong : Double = 0.0
+
+    // Used in requestCurrentLocation
     private var gotstartloc = false
-    private var stepstaken = 0
-    private lateinit var stepstextView : TextView
+
+    // Used in onSensorChanged
     private var stepCounterRunning = false
+
+    // Increments for every taken step
+    private var stepstaken = 0
+
+    private lateinit var stepstextView : TextView
     private var sensorManager:SensorManager? = null
+    private lateinit var binding: View
+
+    // Renders updates to a textView
     private fun renderLog(msg: String) {
         val errors: TextView = findViewById(R.id.errorlogs)
         errors.append(System.getProperty("line.separator")!! + msg)
     }
-    private lateinit var binding: View
-    // The Fused Location Provider provides access to location APIs.
+    // Register Fused Location Provider
     private val fusedLocationClient: FusedLocationProviderClient by lazy {
         LocationServices.getFusedLocationProviderClient(applicationContext)
     }
@@ -74,7 +89,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
-    // When app is first launched
     @SuppressLint("CutPasteId")
     @RequiresApi(Build.VERSION_CODES.Q)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,6 +106,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
         renderLog("Health permission granted")
 
+        // Get Location permission
         if (!applicationContext.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
             requestPermissionWithRationale(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -152,7 +167,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             stepstextView.text = stepstaken.toString()
             
             if (stepstaken == startoffset) {
-                renderLog("Steps = 5")
+                renderLog("Steps = $startoffset")
                 // Request location updates
                 try {
                     requestCurrentLocation()
@@ -162,20 +177,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
             }
             if (stepstaken == startoffset + stepsUntilBreak) {
-                renderLog("Steps = 35")
+                renderLog("Steps = " + (startoffset + stepsUntilBreak).toString())
                 try {
                     requestCurrentLocation()
                 } catch (ex: SecurityException) {
                     renderLog("ERROR: no location available")
                 }
                 stepCounterRunning = false
-                calculate()
+                calculateResult()
             }
         }
     }
 
-    // This function is called once the steps surpass stepsUntilBreak + 5
-    private fun calculate() {
+    // This function is called once the steps surpass stepsUntilBreak + startoffset
+    private fun calculateResult() {
 
         // Create location objects for start and end location
         val endLocation = Location("")
@@ -191,6 +206,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val distanceInMeters = endLocation.distanceTo(startLocation)
         renderLog("Calculated distance")
 
+        // This part of code will be different, we will be using a model developed with linear regression
         val strideLength = distanceInMeters / stepsUntilBreak
         val heightMin = strideLength / 0.39
         val heightMax = strideLength / 0.46
@@ -266,12 +282,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
-    /**
-     * Gets current location.
-     * Note: The code checks for permission before calling this method, that is, it's never called
-     * from a method with a missing permission. Also, I include a second check with my extension
-     * function in case devs just copy/paste this code.
-     */
     @SuppressLint("MissingPermission")
     private fun requestCurrentLocation() {
         renderLog("requestCurrentLocation()")
@@ -294,6 +304,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
             currentLocationTask.addOnCompleteListener { task: Task<Location> ->
                 if (task.isSuccessful && task.result != null) {
+                    // Set start location or end location
                     if (!gotstartloc) {
                         startlat = task.result.latitude
                         startlong = task.result.longitude
