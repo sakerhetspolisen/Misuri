@@ -2,8 +2,10 @@ package com.example.misuriv101
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.hardware.Sensor
@@ -11,12 +13,9 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
-import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -24,31 +23,23 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationRequest.PRIORITY_HIGH_ACCURACY
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.tasks.CancellationTokenSource
-import com.google.android.gms.tasks.Task
-import com.google.android.material.snackbar.Snackbar
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 
+private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
 
 @RequiresApi(Build.VERSION_CODES.M)
 class MainActivity : AppCompatActivity(), SensorEventListener {
+
+    private var foregroundOnlyLocationService: ForegroundOnlyLocationService? = null
+    private lateinit var foregroundOnlyBroadcastReceiver: ForegroundOnlyBroadcastReceiver
 
     // Steps that the user takes before the app starts to log distance, (warm-up steps)
     private val startoffset = 5
 
     // How many steps the user takes before app stops registering distance
-    private val stepsUntilBreak = 100
+    private val stepsUntilBreak = 20
 
-    // Lat and long are stored in variables
-    private var startlat : Double = 0.0
-    private var startlong : Double = 0.0
-    private var endlat : Double = 0.0
-    private var endlong : Double = 0.0
-
-    // Used in requestCurrentLocation
-    private var gotstartloc = false
+    private var locationArray: MutableList<Location> = ArrayList()
 
     // Used in onSensorChanged
     private var stepCounterRunning = false
@@ -58,43 +49,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     private lateinit var stepstextView : TextView
     private var sensorManager:SensorManager? = null
-    private lateinit var binding: View
 
     // Renders updates to a textView
     private fun renderLog(msg: String) {
         val errors: TextView = findViewById(R.id.errorlogs)
         errors.append(System.getProperty("line.separator")!! + msg)
     }
-    // Register Fused Location Provider
-    private val fusedLocationClient: FusedLocationProviderClient by lazy {
-        LocationServices.getFusedLocationProviderClient(applicationContext)
-    }
 
-    // Allows class to cancel the location request if it exits the activity.
-    // Typically, you use one cancellation source per lifecycle.
-    private var cancellationTokenSource = CancellationTokenSource()
-
-    // If the user denied a previous permission request, but didn't check "Don't ask again", this
-    // Snackbar provides an explanation for why user should approve, i.e., the additional rationale.
-    private val fineLocationRationalSnackbar by lazy {
-        Snackbar.make(
-            binding,
-            R.string.fine_location_permission_rationale,
-            Snackbar.LENGTH_LONG
-        ).setAction(R.string.ok) {
-            requestPermissions(
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
-                REQUEST_FINE_LOCATION_PERMISSIONS_REQUEST_CODE
-            )
-        }
-    }
-
-    @SuppressLint("CutPasteId")
     @RequiresApi(Build.VERSION_CODES.Q)
+    @SuppressLint("CutPasteId")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        binding = findViewById(R.id.activity_main)
+
+        foregroundOnlyBroadcastReceiver = ForegroundOnlyBroadcastReceiver()
 
         // Get health permissions
         if ((ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED)) {
@@ -107,12 +75,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         renderLog("Health permission granted")
 
         // Get Location permission
-        if (!applicationContext.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
-            requestPermissionWithRationale(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                REQUEST_FINE_LOCATION_PERMISSIONS_REQUEST_CODE,
-                fineLocationRationalSnackbar
-            )
+        if (!foregroundPermissionApproved()) {
+            requestForegroundPermissions()
         }
         renderLog("Location permission granted")
 
@@ -159,6 +123,27 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            foregroundOnlyBroadcastReceiver,
+            IntentFilter(
+                ForegroundOnlyLocationService.ACTION_FOREGROUND_ONLY_LOCATION_BROADCAST
+            )
+        )
+    }
+
+    override fun onPause() {
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(
+            foregroundOnlyBroadcastReceiver
+        )
+        super.onPause()
+    }
+
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -169,22 +154,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (stepstaken == startoffset) {
                 renderLog("Steps = $startoffset")
                 // Request location updates
-                try {
-                    requestCurrentLocation()
-                    renderLog("Requested current location")
-                } catch (ex: SecurityException) {
-                    renderLog("ERROR: no location available")
-                }
+                foregroundOnlyLocationService?.subscribeToLocationUpdates()
+                    ?: renderLog("Location service not found")
             }
             if (stepstaken == startoffset + stepsUntilBreak) {
-                renderLog("Steps = " + (startoffset + stepsUntilBreak).toString())
-                try {
-                    requestCurrentLocation()
-                } catch (ex: SecurityException) {
-                    renderLog("ERROR: no location available")
-                }
-                stepCounterRunning = false
                 calculateResult()
+                stepCounterRunning = false
+                renderLog("Steps = " + (startoffset + stepsUntilBreak).toString())
             }
         }
     }
@@ -192,18 +168,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // This function is called once the steps surpass stepsUntilBreak + startoffset
     private fun calculateResult() {
 
-        // Create location objects for start and end location
-        val endLocation = Location("")
-        endLocation.latitude = endlat
-        endLocation.longitude = endlong
-        val startLocation = Location("")
-        startLocation.latitude = startlat
-        startLocation.longitude = startlong
-        renderLog("Created start and end instances")
-
         // Calculate walked distance
         // TODO: Customize this so that user can walk curved distances
-        val distanceInMeters = endLocation.distanceTo(startLocation)
+        val distanceInMeters = locationArray.last().distanceTo(locationArray[0])
         renderLog("Calculated distance")
 
         // This part of code will be different, we will be using a model developed with linear regression
@@ -213,26 +180,33 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val heightAvg = strideLength / 0.42
         renderLog("Calculated proportions")
 
-        renderToScreen(heightMin, heightMax, heightAvg)
+        renderToScreen(locationArray[0].latitude, locationArray[0].longitude, locationArray.last().latitude, locationArray.last().longitude, distanceInMeters)
     }
 
     @SuppressLint("SetTextI18n")
-    fun renderToScreen(min: Double, max: Double, avg: Double) {
+    fun renderToScreen(startla: Double, startlo: Double, endla: Double, endlo: Double, dist: Float) {
         val textView: TextView = findViewById(R.id.calculation_result)
-        textView.text = "I calculated your height to be between ${min}cm and ${max}cm. My guess is ${avg}cm."
+        textView.text = "Startlocation: (${startla},${startlo}), Stoplocation: (${endla}, ${endlo}), Distance: ${dist}"
     }
 
     override fun onStop() {
+        foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
         super.onStop()
-        renderLog("onStop()")
-        // Cancels location request (if in flight).
-        cancellationTokenSource.cancel()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        renderLog("onDestroy()")
-        sensorManager?.unregisterListener(this)
+    private fun foregroundPermissionApproved(): Boolean {
+        return PackageManager.PERMISSION_GRANTED == ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        )
+    }
+
+    private fun requestForegroundPermissions() {
+            ActivityCompat.requestPermissions(
+                this@MainActivity,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE
+            )
     }
 
     override fun onRequestPermissionsResult(
@@ -240,91 +214,39 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         permissions: Array<String>,
         grantResults: IntArray
     ) {
-        renderLog("onRequestPermissionResult()")
+        renderLog("onRequestPermissionsResult()")
 
-        if (requestCode == REQUEST_FINE_LOCATION_PERMISSIONS_REQUEST_CODE) {
-            when {
+        when (requestCode) {
+            REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE -> when {
                 grantResults.isEmpty() ->
                     // If user interaction was interrupted, the permission request
-                    // is cancelled and you receive an empty array.
+                    // is cancelled and you receive empty arrays.
                     renderLog("User interaction was cancelled.")
 
                 grantResults[0] == PackageManager.PERMISSION_GRANTED ->
-                    Snackbar.make(
-                        binding,
-                        R.string.permission_approved_explanation,
-                        Snackbar.LENGTH_LONG
-                    )
-                        .show()
+                    // Permission was granted.
+                    foregroundOnlyLocationService?.subscribeToLocationUpdates()
 
                 else -> {
-                    Snackbar.make(
-                        binding,
-                        R.string.fine_permission_denied_explanation,
-                        Snackbar.LENGTH_LONG
-                    )
-                        .setAction(R.string.settings) {
-                            // Build intent that displays the App settings screen.
-                            val intent = Intent()
-                            intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
-                            val uri = Uri.fromParts(
-                                "package",
-                                BuildConfig.APPLICATION_ID,
-                                null
-                            )
-                            intent.data = uri
-                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            startActivity(intent)
-                        }
-                        .show()
+                    renderLog("Location permission denied")
                 }
             }
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun requestCurrentLocation() {
-        renderLog("requestCurrentLocation()")
-        if (applicationContext.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+    /**
+     * Receiver for location broadcasts from [ForegroundOnlyLocationService].
+     */
+    private inner class ForegroundOnlyBroadcastReceiver : BroadcastReceiver() {
 
-            // Returns a single current location fix on the device. Unlike getLastLocation() that
-            // returns a cached location, this method could cause active location computation on the
-            // device. A single fresh location will be returned if the device location can be
-            // determined within reasonable time (tens of seconds), otherwise null will be returned.
-            //
-            // Both arguments are required.
-            // PRIORITY type is self-explanatory. (Other options are PRIORITY_BALANCED_POWER_ACCURACY,
-            // PRIORITY_LOW_POWER, and PRIORITY_NO_POWER.)
-            // The second parameter, [CancellationToken] allows the activity to cancel the request
-            // before completion.
-            val currentLocationTask: Task<Location> = fusedLocationClient.getCurrentLocation(
-                PRIORITY_HIGH_ACCURACY,
-                cancellationTokenSource.token
+        override fun onReceive(context: Context, intent: Intent) {
+            val location = intent.getParcelableExtra<Location>(
+                ForegroundOnlyLocationService.EXTRA_LOCATION
             )
-
-            currentLocationTask.addOnCompleteListener { task: Task<Location> ->
-                if (task.isSuccessful && task.result != null) {
-                    // Set start location or end location
-                    if (!gotstartloc) {
-                        startlat = task.result.latitude
-                        startlong = task.result.longitude
-                        gotstartloc = true
-                        renderLog("Start location set")
-                    } else {
-                        endlat = task.result.latitude
-                        endlong = task.result.longitude
-                        renderLog("End location set")
-                    }
-                } else {
-                    val exception = task.exception
-                    renderLog("Location (failure): $exception")
-                }
+            if (location != null) {
+                locationArray.add(location)
             }
         }
-    }
-
-    companion object {
-        private const val REQUEST_FINE_LOCATION_PERMISSIONS_REQUEST_CODE = 34
     }
 }
 
