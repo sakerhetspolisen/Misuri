@@ -2,10 +2,7 @@ package com.example.misuriv101
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Typeface
 import android.hardware.Sensor
@@ -15,6 +12,7 @@ import android.hardware.SensorManager
 import android.location.Location
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.text.method.ScrollingMovementMethod
 import android.widget.Button
 import android.widget.TextView
@@ -24,14 +22,46 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.ServiceConnection
+import android.content.SharedPreferences
+import android.net.Uri
+import android.provider.Settings
+import android.util.Log
 
+import com.google.android.material.snackbar.Snackbar
+
+private const val TAG = "MainActivity"
 private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
 
 @RequiresApi(Build.VERSION_CODES.M)
-class MainActivity : AppCompatActivity(), SensorEventListener {
+class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceChangeListener, SensorEventListener {
+
+    private var foregroundOnlyLocationServiceBound = false
 
     private var foregroundOnlyLocationService: ForegroundOnlyLocationService? = null
+
     private lateinit var foregroundOnlyBroadcastReceiver: ForegroundOnlyBroadcastReceiver
+
+    private lateinit var sharedPreferences:SharedPreferences
+
+    private val foregroundOnlyServiceConnection = object : ServiceConnection {
+
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            val binder = service as ForegroundOnlyLocationService.LocalBinder
+            foregroundOnlyLocationService = binder.service
+            foregroundOnlyLocationServiceBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            foregroundOnlyLocationService = null
+            foregroundOnlyLocationServiceBound = false
+        }
+    }
 
     // Steps that the user takes before the app starts to log distance, (warm-up steps)
     private val startoffset = 5
@@ -64,6 +94,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         foregroundOnlyBroadcastReceiver = ForegroundOnlyBroadcastReceiver()
 
+        sharedPreferences =
+            getSharedPreferences(getString(R.string.preference_file_key), Context.MODE_PRIVATE)
+
         // Get health permissions
         if ((ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED)) {
             ActivityCompat.requestPermissions(
@@ -71,14 +104,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
                 2
             )
+            renderLog("Health permission prompted")
         }
-        renderLog("Health permission granted")
-
-        // Get Location permission
-        if (!foregroundPermissionApproved()) {
-            requestForegroundPermissions()
-        }
-        renderLog("Location permission granted")
 
         // Register sensor manager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -87,7 +114,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             sensorManager!!.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR),
             SensorManager.SENSOR_DELAY_FASTEST
         )
-        renderLog("Registered sensor manager")
 
 
         // Make textView scrollable for event logging
@@ -113,11 +139,22 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Create an onClick for the "Start"-button
         val button: Button = findViewById(R.id.init_button)
         button.setOnClickListener {
+            val enabled = sharedPreferences.getBoolean(
+                SharedPreferenceUtil.KEY_FOREGROUND_ENABLED, false)
+
+            if (enabled) {
+                foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
+            } else {
+                if (foregroundPermissionApproved()) {
+                    foregroundOnlyLocationService?.subscribeToLocationUpdates()
+                        ?: renderLog("Service not bound")
+                } else {
+                    requestForegroundPermissions()
+                }
+            }
             if (!stepCounterRunning) {
-                renderLog("Button clicked")
-                                                                                                
-                // Activate step counter                                                          
-                stepCounterRunning = true                                                         
+                // Activate step counter
+                stepCounterRunning = true
                 Toast.makeText(this, "Please take 5 steps to initiate", Toast.LENGTH_SHORT).show()
             }
         }
@@ -125,6 +162,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onStart() {
         super.onStart()
+        sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        val serviceIntent = Intent(this, ForegroundOnlyLocationService::class.java)
+        bindService(serviceIntent, foregroundOnlyServiceConnection, Context.BIND_AUTO_CREATE)
     }
 
     override fun onResume() {
@@ -150,14 +190,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR && stepCounterRunning) {
             stepstaken += 1
             stepstextView.text = stepstaken.toString()
-            
+
             if (stepstaken == startoffset) {
                 renderLog("Steps = $startoffset")
-                // Request location updates
-                foregroundOnlyLocationService?.subscribeToLocationUpdates()
-                    ?: renderLog("Location service not found")
             }
             if (stepstaken == startoffset + stepsUntilBreak) {
+                foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
                 calculateResult()
                 stepCounterRunning = false
                 renderLog("Steps = " + (startoffset + stepsUntilBreak).toString())
@@ -186,12 +224,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     @SuppressLint("SetTextI18n")
     fun renderToScreen(startla: Double, startlo: Double, endla: Double, endlo: Double, dist: Float) {
         val textView: TextView = findViewById(R.id.calculation_result)
-        textView.text = "Startlocation: (${startla},${startlo}), Stoplocation: (${endla}, ${endlo}), Distance: ${dist}"
+        textView.text = "Startlocation: (${startla},${startlo}), Stoplocation: (${endla}, ${endlo}), Distance: $dist"
     }
 
     override fun onStop() {
-        foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
+        if (foregroundOnlyLocationServiceBound) {
+            unbindService(foregroundOnlyServiceConnection)
+            foregroundOnlyLocationServiceBound = false
+        }
+        sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         super.onStop()
+    }
+
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+        // Updates button states if new while in use location is added to SharedPreferences.
+        if (key == SharedPreferenceUtil.KEY_FOREGROUND_ENABLED) {
+            renderLog("onSharedPreferenceChanged")
+        }
     }
 
     private fun foregroundPermissionApproved(): Boolean {
@@ -202,11 +251,33 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun requestForegroundPermissions() {
+        val provideRationale = foregroundPermissionApproved()
+
+        // If the user denied a previous request, but didn't check "Don't ask again", provide
+        // additional rationale.
+        if (provideRationale) {
+            Snackbar.make(
+                findViewById(R.id.activity_main),
+                R.string.permission_rationale,
+                Snackbar.LENGTH_LONG
+            )
+                .setAction(R.string.ok) {
+                    // Request permission
+                    ActivityCompat.requestPermissions(
+                        this@MainActivity,
+                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                        REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE
+                    )
+                }
+                .show()
+        } else {
+            renderLog("Requested foreground-only permission")
             ActivityCompat.requestPermissions(
                 this@MainActivity,
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
                 REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE
             )
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -226,9 +297,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 grantResults[0] == PackageManager.PERMISSION_GRANTED ->
                     // Permission was granted.
                     foregroundOnlyLocationService?.subscribeToLocationUpdates()
+                        ?: renderLog( "Service Not Bound 2")
 
                 else -> {
-                    renderLog("Location permission denied")
+                    // Permission denied.
+                    Snackbar.make(
+                        findViewById(R.id.activity_main),
+                        R.string.permission_denied_explanation,
+                        Snackbar.LENGTH_LONG
+                    )
+                        .setAction(R.string.settings) {
+                            // Build intent that displays the App settings screen.
+                            val intent = Intent()
+                            intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                            val uri = Uri.fromParts(
+                                "package",
+                                BuildConfig.APPLICATION_ID,
+                                null
+                            )
+                            intent.data = uri
+                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            startActivity(intent)
+                        }
+                        .show()
                 }
             }
         }
