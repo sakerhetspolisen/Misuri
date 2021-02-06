@@ -1,4 +1,4 @@
-package com.example.misuriv101
+package com.example.misuri
 
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4

@@ -1,4 +1,4 @@
-package com.example.misuriv101
+package com.example.misuri
 
 import org.junit.Test
 

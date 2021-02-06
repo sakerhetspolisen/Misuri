@@ -1,4 +1,4 @@
-package com.example.misuriv101
+package com.example.misuri
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -31,11 +31,9 @@ import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.net.Uri
 import android.provider.Settings
-import android.util.Log
 
 import com.google.android.material.snackbar.Snackbar
 
-private const val TAG = "MainActivity"
 private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
 
 @RequiresApi(Build.VERSION_CODES.M)
@@ -63,19 +61,21 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         }
     }
 
-    // Steps that the user takes before the app starts to log distance, (warm-up steps)
-    private val startoffset = 5
-
     // How many steps the user takes before app stops registering distance
-    private val stepsUntilBreak = 20
+    private val locationUpdatesUntilBreak = 10
 
     private var locationArray: MutableList<Location> = ArrayList()
 
     // Used in onSensorChanged
-    private var stepCounterRunning = false
+    private var appIsRunning = false
 
-    // Increments for every taken step
-    private var stepstaken = 0
+    // Increments for every taken step since button click
+    private var totalstepsTaken = 0
+
+    // Increments for every taken step since first location update
+    private var stepsRegistered = 0
+
+    private var locationUpdatesReceived = 0
 
     private lateinit var stepstextView : TextView
     private var sensorManager:SensorManager? = null
@@ -151,11 +151,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                 } else {
                     requestForegroundPermissions()
                 }
-            }
-            if (!stepCounterRunning) {
-                // Activate step counter
-                stepCounterRunning = true
-                Toast.makeText(this, "Please take 5 steps to initiate", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Start walking!", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -187,18 +183,11 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR && stepCounterRunning) {
-            stepstaken += 1
-            stepstextView.text = stepstaken.toString()
-
-            if (stepstaken == startoffset) {
-                renderLog("Steps = $startoffset")
-            }
-            if (stepstaken == startoffset + stepsUntilBreak) {
-                foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
-                calculateResult()
-                stepCounterRunning = false
-                renderLog("Steps = " + (startoffset + stepsUntilBreak).toString())
+        if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR) {
+            totalstepsTaken += 1
+            stepstextView.text = totalstepsTaken.toString()
+            if (appIsRunning) {
+                stepsRegistered += 1
             }
         }
     }
@@ -209,22 +198,21 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         // Calculate walked distance
         // TODO: Customize this so that user can walk curved distances
         val distanceInMeters = locationArray.last().distanceTo(locationArray[0])
-        renderLog("Calculated distance")
 
         // This part of code will be different, we will be using a model developed with linear regression
-        val strideLength = distanceInMeters / stepsUntilBreak
+        val strideLength = distanceInMeters / stepsRegistered
         val heightMin = strideLength / 0.39
-        val heightMax = strideLength / 0.46
-        val heightAvg = strideLength / 0.42
-        renderLog("Calculated proportions")
+        // val heightMax = strideLength / 0.46
+        // val heightAvg = strideLength / 0.42
+        // renderLog("Calculated proportions")
 
-        renderToScreen(locationArray[0].latitude, locationArray[0].longitude, locationArray.last().latitude, locationArray.last().longitude, distanceInMeters)
+        renderToScreen(locationArray.last(),locationArray[0],distanceInMeters,heightMin)
     }
 
     @SuppressLint("SetTextI18n")
-    fun renderToScreen(startla: Double, startlo: Double, endla: Double, endlo: Double, dist: Float) {
+    fun renderToScreen(start : Location, end : Location,dist : Float,h : Double) {
         val textView: TextView = findViewById(R.id.calculation_result)
-        textView.text = "Startlocation: (${startla},${startlo}), Stoplocation: (${endla}, ${endlo}), Distance: $dist"
+        textView.text = start.latitude.toString() + "////" + start.longitude.toString() + System.getProperty("line.separator")!! + end.latitude.toString() + "/////" + end.longitude.toString() + System.getProperty("line.separator")!! + dist.toString() + System.getProperty("line.separator")!! + h.toString()
     }
 
     override fun onStop() {
@@ -285,41 +273,43 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         permissions: Array<String>,
         grantResults: IntArray
     ) {
-        renderLog("onRequestPermissionsResult()")
+        if (permissions.contains("ACCESS_FINE_LOCATION")) {
+            renderLog("onRequestPermissionsResult()")
 
-        when (requestCode) {
-            REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE -> when {
-                grantResults.isEmpty() ->
-                    // If user interaction was interrupted, the permission request
-                    // is cancelled and you receive empty arrays.
-                    renderLog("User interaction was cancelled.")
+            when (requestCode) {
+                REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE -> when {
+                    grantResults.isEmpty() ->
+                        // If user interaction was interrupted, the permission request
+                        // is cancelled and you receive empty arrays.
+                        renderLog("User interaction was cancelled.")
 
-                grantResults[0] == PackageManager.PERMISSION_GRANTED ->
-                    // Permission was granted.
-                    foregroundOnlyLocationService?.subscribeToLocationUpdates()
-                        ?: renderLog( "Service Not Bound 2")
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED ->
+                        // Permission was granted.
+                        foregroundOnlyLocationService?.subscribeToLocationUpdates()
+                            ?: renderLog("Service Not Bound 2")
 
-                else -> {
-                    // Permission denied.
-                    Snackbar.make(
-                        findViewById(R.id.activity_main),
-                        R.string.permission_denied_explanation,
-                        Snackbar.LENGTH_LONG
-                    )
-                        .setAction(R.string.settings) {
-                            // Build intent that displays the App settings screen.
-                            val intent = Intent()
-                            intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
-                            val uri = Uri.fromParts(
-                                "package",
-                                BuildConfig.APPLICATION_ID,
-                                null
-                            )
-                            intent.data = uri
-                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            startActivity(intent)
-                        }
-                        .show()
+                    else -> {
+                        // Permission denied.
+                        Snackbar.make(
+                            findViewById(R.id.activity_main),
+                            R.string.permission_denied_explanation,
+                            Snackbar.LENGTH_LONG
+                        )
+                            .setAction(R.string.settings) {
+                                // Build intent that displays the App settings screen.
+                                val intent = Intent()
+                                intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                                val uri = Uri.fromParts(
+                                    "package",
+                                    BuildConfig.APPLICATION_ID,
+                                    null
+                                )
+                                intent.data = uri
+                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                startActivity(intent)
+                            }
+                            .show()
+                    }
                 }
             }
         }
@@ -335,7 +325,18 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                 ForegroundOnlyLocationService.EXTRA_LOCATION
             )
             if (location != null) {
-                locationArray.add(location)
+                if (totalstepsTaken > 0) {
+                    locationArray.add(location)
+                    if (locationUpdatesReceived == 0) {
+                        appIsRunning = true
+                    }
+                    if (locationUpdatesReceived == locationUpdatesUntilBreak) {
+                        appIsRunning = false
+                        calculateResult()
+                    }
+                    locationUpdatesReceived += 1
+                    renderLog("(" + location.latitude.toString() + location.longitude.toString() + ")")
+                }
             }
         }
     }

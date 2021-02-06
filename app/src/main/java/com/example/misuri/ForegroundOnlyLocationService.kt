@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.example.misuriv101
+package com.example.misuri
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -36,7 +36,6 @@ import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
-import java.util.concurrent.TimeUnit
 
 /**
  * Service tracks location when requested and updates Activity via binding. If Activity is
@@ -93,15 +92,15 @@ class ForegroundOnlyLocationService : Service() {
             // IMPORTANT NOTE: Apps running on Android 8.0 and higher devices (regardless of
             // targetSdkVersion) may receive updates less frequently than this interval when the app
             // is no longer in the foreground.
-            interval = TimeUnit.SECONDS.toMillis(60)
+            interval = 1000
 
             // Sets the fastest rate for active location updates. This interval is exact, and your
             // application will never receive updates more frequently than this value.
-            fastestInterval = TimeUnit.SECONDS.toMillis(30)
+            fastestInterval = 1000
 
             // Sets the maximum time when batched location updates are delivered. Updates may be
             // delivered sooner than this interval.
-            maxWaitTime = TimeUnit.MINUTES.toMillis(2)
+            maxWaitTime = 1000
 
             priority = LocationRequest.PRIORITY_HIGH_ACCURACY
         }
@@ -226,7 +225,6 @@ class ForegroundOnlyLocationService : Service() {
         Log.d(TAG, "unsubscribeToLocationUpdates()")
 
         try {
-            // TODO: Step 1.6, Unsubscribe to location changes.
             val removeTask = fusedLocationProviderClient.removeLocationUpdates(locationCallback)
             removeTask.addOnCompleteListener { task ->
                 if (task.isSuccessful) {
