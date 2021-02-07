@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.*
 import android.content.pm.PackageManager
-import android.graphics.Typeface
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -31,7 +30,7 @@ import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.net.Uri
 import android.provider.Settings
-
+import android.media.MediaPlayer
 import com.google.android.material.snackbar.Snackbar
 
 private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
@@ -40,51 +39,46 @@ private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
 class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceChangeListener, SensorEventListener {
 
     private var foregroundOnlyLocationServiceBound = false
-
     private var foregroundOnlyLocationService: ForegroundOnlyLocationService? = null
-
     private lateinit var foregroundOnlyBroadcastReceiver: ForegroundOnlyBroadcastReceiver
-
     private lateinit var sharedPreferences:SharedPreferences
+    private var appIsRunning = false
+    private val locationUpdatesUntilBreak = 10
+    private var locationUpdatesReceived = 0
+    private var sensorManager:SensorManager? = null
+    private var mediaPlayer:MediaPlayer? = null
+
+    // All location instances are appended to this array
+    private var locationArray: MutableList<Location> = ArrayList()
+
+    // Increments for every taken step since button click
+    private var totalStepsTaken = 0
+    // Increments for every taken step since first location update
+    private var stepsRegistered = 0
+
+    // textViews that are called more than once in code
+    private lateinit var stepstextView : TextView
+    private lateinit var resulttextView: TextView
 
     private val foregroundOnlyServiceConnection = object : ServiceConnection {
-
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val binder = service as ForegroundOnlyLocationService.LocalBinder
             foregroundOnlyLocationService = binder.service
             foregroundOnlyLocationServiceBound = true
         }
-
         override fun onServiceDisconnected(name: ComponentName) {
             foregroundOnlyLocationService = null
             foregroundOnlyLocationServiceBound = false
         }
     }
 
-    // How many steps the user takes before app stops registering distance
-    private val locationUpdatesUntilBreak = 10
-
-    private var locationArray: MutableList<Location> = ArrayList()
-
-    // Used in onSensorChanged
-    private var appIsRunning = false
-
-    // Increments for every taken step since button click
-    private var totalstepsTaken = 0
-
-    // Increments for every taken step since first location update
-    private var stepsRegistered = 0
-
-    private var locationUpdatesReceived = 0
-
-    private lateinit var stepstextView : TextView
-    private var sensorManager:SensorManager? = null
 
     // Renders updates to a textView
     private fun renderLog(msg: String) {
         val errors: TextView = findViewById(R.id.errorlogs)
         errors.append(System.getProperty("line.separator")!! + msg)
     }
+
 
     @RequiresApi(Build.VERSION_CODES.Q)
     @SuppressLint("CutPasteId")
@@ -93,7 +87,6 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         setContentView(R.layout.activity_main)
 
         foregroundOnlyBroadcastReceiver = ForegroundOnlyBroadcastReceiver()
-
         sharedPreferences =
             getSharedPreferences(getString(R.string.preference_file_key), Context.MODE_PRIVATE)
 
@@ -107,7 +100,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             renderLog("Health permission prompted")
         }
 
-        // Register sensor manager
+        // Register listener for step detector updates
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorManager!!.registerListener(
             this,
@@ -115,30 +108,22 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
             SensorManager.SENSOR_DELAY_FASTEST
         )
 
-
         // Make textView scrollable for event logging
-        val errors: TextView = findViewById(R.id.errorlogs)
-        errors.movementMethod = ScrollingMovementMethod()
+        val logtextView: TextView = findViewById(R.id.errorlogs)
+        logtextView.movementMethod = ScrollingMovementMethod()
 
-        // Display taken steps on screen
         stepstextView = findViewById(R.id.takensteps)
+        resulttextView = findViewById(R.id.calculation_result)
 
-        // Bad way to set font
-        val textView: TextView = findViewById(R.id.stepsLbl)
-        val textView2: TextView = findViewById(R.id.height_title)
-        val textView3: TextView = findViewById(R.id.calculation_result)
-        val textView4: TextView = findViewById(R.id.showversion)
-        val spacegrotesk: Typeface = Typeface.createFromAsset(this.assets, "fonts/spacegrotesk.ttf")
-        textView.typeface = spacegrotesk
-        textView2.typeface = spacegrotesk
-        textView3.typeface = spacegrotesk
-        errors.typeface = spacegrotesk
-        stepstextView.typeface = spacegrotesk
-        textView4.typeface = spacegrotesk
+        val locationupdatestextView: TextView = findViewById(R.id.numberoflocationupdates)
+        locationupdatestextView.text = getString(R.string.app_loc_updates, locationUpdatesUntilBreak.toString())
 
-        // Create an onClick for the "Start"-button
-        val button: Button = findViewById(R.id.init_button)
-        button.setOnClickListener {
+        // Set sound file that plays when recording is stopped
+        mediaPlayer = MediaPlayer.create(this, R.raw.success)
+
+        // This part initiates the recording
+        val initButton: Button = findViewById(R.id.init_button)
+        initButton.setOnClickListener {
             val enabled = sharedPreferences.getBoolean(
                 SharedPreferenceUtil.KEY_FOREGROUND_ENABLED, false)
 
@@ -184,35 +169,12 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
     override fun onSensorChanged(event: SensorEvent) {
         if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR) {
-            totalstepsTaken += 1
-            stepstextView.text = totalstepsTaken.toString()
+            totalStepsTaken += 1
+            stepstextView.text = totalStepsTaken.toString()
             if (appIsRunning) {
                 stepsRegistered += 1
             }
         }
-    }
-
-    // This function is called once the steps surpass stepsUntilBreak + startoffset
-    private fun calculateResult() {
-
-        // Calculate walked distance
-        // TODO: Customize this so that user can walk curved distances
-        val distanceInMeters = locationArray.last().distanceTo(locationArray[0])
-
-        // This part of code will be different, we will be using a model developed with linear regression
-        val strideLength = distanceInMeters / stepsRegistered
-        val heightMin = strideLength / 0.39
-        // val heightMax = strideLength / 0.46
-        // val heightAvg = strideLength / 0.42
-        // renderLog("Calculated proportions")
-
-        renderToScreen(locationArray.last(),locationArray[0],distanceInMeters,heightMin)
-    }
-
-    @SuppressLint("SetTextI18n")
-    fun renderToScreen(start : Location, end : Location,dist : Float,h : Double) {
-        val textView: TextView = findViewById(R.id.calculation_result)
-        textView.text = start.latitude.toString() + "////" + start.longitude.toString() + System.getProperty("line.separator")!! + end.latitude.toString() + "/////" + end.longitude.toString() + System.getProperty("line.separator")!! + dist.toString() + System.getProperty("line.separator")!! + h.toString()
     }
 
     override fun onStop() {
@@ -225,7 +187,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
-        // Updates button states if new while in use location is added to SharedPreferences.
+        // Adds to log if new while in use location is added to SharedPreferences.
         if (key == SharedPreferenceUtil.KEY_FOREGROUND_ENABLED) {
             renderLog("onSharedPreferenceChanged")
         }
@@ -286,7 +248,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                     grantResults[0] == PackageManager.PERMISSION_GRANTED ->
                         // Permission was granted.
                         foregroundOnlyLocationService?.subscribeToLocationUpdates()
-                            ?: renderLog("Service Not Bound 2")
+                            ?: renderLog("Service Not Bound")
 
                     else -> {
                         // Permission denied.
@@ -316,6 +278,25 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     }
 
     /**
+     * Calculation using known body proportions
+     */
+    private fun calculateResult() {
+        val distanceInMeters = locationArray.last().distanceTo(locationArray[0])
+        val strideLength = distanceInMeters / stepsRegistered
+
+        //TODO: Replace with regression function and time integration
+        val heightMin = (strideLength / 0.39).toInt().toString()
+        val heightMax = (strideLength / 0.46).toInt().toString()
+        val heightAvg = (strideLength / 0.42).toInt().toString()
+
+        renderToScreen(distanceInMeters.toInt().toString(), heightMin, heightAvg, heightMax)
+    }
+
+    private fun renderToScreen(dist:String, minHeight:String, avgHeight:String, maxHeight:String) {
+        resulttextView.text = getString(R.string.result_body,dist,minHeight,avgHeight,maxHeight)
+    }
+
+    /**
      * Receiver for location broadcasts from [ForegroundOnlyLocationService].
      */
     private inner class ForegroundOnlyBroadcastReceiver : BroadcastReceiver() {
@@ -325,7 +306,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                 ForegroundOnlyLocationService.EXTRA_LOCATION
             )
             if (location != null) {
-                if (totalstepsTaken > 0) {
+                if (totalStepsTaken > 0) {
                     locationArray.add(location)
                     if (locationUpdatesReceived == 0) {
                         appIsRunning = true
@@ -333,6 +314,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                     if (locationUpdatesReceived == locationUpdatesUntilBreak) {
                         appIsRunning = false
                         calculateResult()
+                        mediaPlayer?.start()
                     }
                     locationUpdatesReceived += 1
                     renderLog("(" + location.latitude.toString() + location.longitude.toString() + ")")

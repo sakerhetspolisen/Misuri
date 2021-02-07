@@ -1,9 +1,11 @@
 <resources>
     <string name="app_name">Misuri</string>
-    <string name="app_version">1.8.0</string>
+    <string name="app_version">1.9.0</string>
+    <string name="app_loc_updates">Location updates: %1$s</string>
     <string name="takensteps_default">0</string>
     <string name="calculation_title">Height calculated:</string>
     <string name="button_text">Start measuring your height</string>
+    <string name="result_body">You walked %1$sm, and your height is between %2$sm and %4$sm. My guess is %3$s.</string>
 
     <string name="launch_activity">Launch activity</string>
     <string name="location_unknown">Location Unknown</string>
