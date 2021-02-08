@@ -2,7 +2,6 @@ package com.example.misuri
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.*
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
