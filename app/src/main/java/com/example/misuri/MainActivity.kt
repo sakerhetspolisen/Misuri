@@ -31,17 +31,19 @@ import android.net.Uri
 import android.provider.Settings
 import android.media.MediaPlayer
 import com.google.android.material.snackbar.Snackbar
+import kotlin.math.*
+
 
 private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
 
 @RequiresApi(Build.VERSION_CODES.M)
 class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceChangeListener, SensorEventListener {
-
     private var foregroundOnlyLocationServiceBound = false
     private var foregroundOnlyLocationService: ForegroundOnlyLocationService? = null
     private lateinit var foregroundOnlyBroadcastReceiver: ForegroundOnlyBroadcastReceiver
     private lateinit var sharedPreferences:SharedPreferences
     private var appIsRunning = false
+
     private val locationUpdatesUntilBreak = 10
     private var locationUpdatesReceived = 0
     private var sensorManager:SensorManager? = null
@@ -55,9 +57,12 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     // Increments for every taken step since first location update
     private var stepsRegistered = 0
 
+    private var startTimeMillis = 0L
+
     // textViews that are called more than once in code
     private lateinit var stepstextView : TextView
     private lateinit var resulttextView: TextView
+    private lateinit var locationUpdatesCountertextView : TextView
 
     private val foregroundOnlyServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
@@ -75,7 +80,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
     // Renders updates to a textView
     private fun renderLog(msg: String) {
         val errors: TextView = findViewById(R.id.errorlogs)
-        errors.append(System.getProperty("line.separator")!! + msg)
+        errors.append(" | $msg")
     }
 
 
@@ -113,6 +118,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
 
         stepstextView = findViewById(R.id.takensteps)
         resulttextView = findViewById(R.id.calculation_result)
+        locationUpdatesCountertextView = findViewById(R.id.receivedLocationUpdates)
 
         val locationupdatestextView: TextView = findViewById(R.id.numberoflocationupdates)
         locationupdatestextView.text = getString(R.string.app_loc_updates, locationUpdatesUntilBreak.toString())
@@ -123,20 +129,13 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         // This part initiates the recording
         val initButton: Button = findViewById(R.id.init_button)
         initButton.setOnClickListener {
-            val enabled = sharedPreferences.getBoolean(
-                SharedPreferenceUtil.KEY_FOREGROUND_ENABLED, false)
-
-            if (enabled) {
-                foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
+            if (foregroundPermissionApproved()) {
+                foregroundOnlyLocationService?.subscribeToLocationUpdates()
+                    ?: renderLog("Service not bound")
             } else {
-                if (foregroundPermissionApproved()) {
-                    foregroundOnlyLocationService?.subscribeToLocationUpdates()
-                        ?: renderLog("Service not bound")
-                } else {
-                    requestForegroundPermissions()
-                }
-                Toast.makeText(this, "Start walking!", Toast.LENGTH_SHORT).show()
+                requestForegroundPermissions()
             }
+            Toast.makeText(this, "Start walking!", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -180,6 +179,10 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         if (foregroundOnlyLocationServiceBound) {
             unbindService(foregroundOnlyServiceConnection)
             foregroundOnlyLocationServiceBound = false
+        }
+        // Opposed to the recommendation, Misuri unregisters to Location updates either when the app has quit or locationUpdatesUntilBreak is reached.
+        if (sharedPreferences.getBoolean(SharedPreferenceUtil.KEY_FOREGROUND_ENABLED, false)) {
+            foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
         }
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         super.onStop()
@@ -276,6 +279,7 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         }
     }
 
+
     /**
      * Calculation using known body proportions
      */
@@ -283,7 +287,6 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
         val distanceInMeters = locationArray.last().distanceTo(locationArray[0])
         val strideLength = distanceInMeters / stepsRegistered
 
-        //TODO: Replace with regression function and time integration
         val heightMin = (strideLength / 0.39).toInt().toString()
         val heightMax = (strideLength / 0.46).toInt().toString()
         val heightAvg = (strideLength / 0.42).toInt().toString()
@@ -309,14 +312,16 @@ class MainActivity : AppCompatActivity(), SharedPreferences.OnSharedPreferenceCh
                     locationArray.add(location)
                     if (locationUpdatesReceived == 0) {
                         appIsRunning = true
+                        startTimeMillis = System.currentTimeMillis()
                     }
                     if (locationUpdatesReceived == locationUpdatesUntilBreak) {
                         appIsRunning = false
                         calculateResult()
+                        foregroundOnlyLocationService?.unsubscribeToLocationUpdates()
                         mediaPlayer?.start()
                     }
                     locationUpdatesReceived += 1
-                    renderLog("(" + location.latitude.toString() + location.longitude.toString() + ")")
+                    locationUpdatesCountertextView.text = locationUpdatesReceived.toString()
                 }
             }
         }

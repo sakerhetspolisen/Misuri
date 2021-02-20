@@ -18,6 +18,7 @@ package com.example.misuri
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -92,7 +93,7 @@ class ForegroundOnlyLocationService : Service() {
             // IMPORTANT NOTE: Apps running on Android 8.0 and higher devices (regardless of
             // targetSdkVersion) may receive updates less frequently than this interval when the app
             // is no longer in the foreground.
-            interval = 1000
+            interval = 3000
 
             // Sets the fastest rate for active location updates. This interval is exact, and your
             // application will never receive updates more frequently than this value.
@@ -152,7 +153,7 @@ class ForegroundOnlyLocationService : Service() {
         return START_NOT_STICKY
     }
 
-    override fun onBind(intent: Intent): IBinder {
+    override fun onBind(intent: Intent): IBinder? {
         Log.d(TAG, "onBind()")
 
         // MainActivity (client) comes into foreground and binds to service, so the service can
@@ -212,7 +213,6 @@ class ForegroundOnlyLocationService : Service() {
         startService(Intent(applicationContext, ForegroundOnlyLocationService::class.java))
 
         try {
-            // TODO: Step 1.5, Subscribe to location changes.
             fusedLocationProviderClient.requestLocationUpdates(
                 locationRequest, locationCallback, Looper.myLooper())
         } catch (unlikely: SecurityException) {
@@ -277,9 +277,16 @@ class ForegroundOnlyLocationService : Service() {
             .bigText(mainNotificationText)
             .setBigContentTitle(titleText)
 
+        val launchActivityIntent = Intent(this, MainActivity::class.java)
 
         val cancelIntent = Intent(this, ForegroundOnlyLocationService::class.java)
         cancelIntent.putExtra(EXTRA_CANCEL_LOCATION_TRACKING_FROM_NOTIFICATION, true)
+
+        val servicePendingIntent = PendingIntent.getService(
+            this, 0, cancelIntent, PendingIntent.FLAG_UPDATE_CURRENT)
+
+        val activityPendingIntent = PendingIntent.getActivity(
+            this, 0, launchActivityIntent, 0)
 
         // 4. Build and issue the notification.
         // Notification Channel Id is ignored for Android pre O (26).
@@ -294,6 +301,15 @@ class ForegroundOnlyLocationService : Service() {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .addAction(
+                0,getString(R.string.launch_activity),
+                activityPendingIntent
+            )
+            .addAction(
+                0,
+                getString(R.string.stop_location_updates_button_text),
+                servicePendingIntent
+            )
             .build()
     }
 
